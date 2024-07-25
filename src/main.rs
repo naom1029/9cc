@@ -26,19 +26,33 @@ impl Default for Token {
     }
 }
 #[allow(dead_code)]
-fn error_at(user_input: &str, loc: usize, fmt: fmt::Arguments) {
+fn error_at(loc: &str, input: &str, args: fmt::Arguments) {
     let mut buffer = String::new();
 
-    writeln!(buffer, "{}", user_input).unwrap();
-    writeln!(buffer, "{:width$}^ ", "", width = loc).unwrap();
-    writeln!(buffer, "{}", fmt).unwrap();
+    let pos = loc.as_ptr() as usize - input.as_ptr() as usize;
+    writeln!(buffer, "{}", input).unwrap();
+    writeln!(buffer, "{:width$}^ ", "", width = pos).unwrap();
 
+    writeln!(buffer, "{}", args).unwrap();
     eprintln!("{}", buffer);
     process::exit(1);
 }
-fn error(msg: &str) {
-    eprintln!("{}", msg);
+
+macro_rules! error_at {
+    ($loc:expr, $input:expr, $($arg:tt)*) => {
+        error_at($loc, $input, format_args!($($arg)*));
+    };
+}
+
+fn error(args: fmt::Arguments) {
+    eprintln!("{}", args);
     process::exit(1);
+}
+
+macro_rules! error {
+    ($($arg:tt)*) => {
+        error(format_args!($($arg)*));
+    };
 }
 fn consume(token: &mut Option<Box<Token>>, op: char) -> bool {
     if let Some(t) = token {
@@ -52,23 +66,23 @@ fn consume(token: &mut Option<Box<Token>>, op: char) -> bool {
 fn expect(token: &mut Option<Box<Token>>, op: char) {
     if let Some(t) = token {
         if t.kind != TokenKind::TkReserved || t.str.chars().next() != Some(op) {
-            error(&format!("'{}'ではありません", op));
+            error!("'{}'ではありません", op);
         }
         *token = t.next.take();
     } else {
-        error(&format!("'{}'ではありません", op));
+        error!("'{}'ではありません", op);
     }
 }
 fn expect_number(token: &mut Option<Box<Token>>) -> i32 {
     if let Some(t) = token {
         if t.kind != TokenKind::TkNum {
-            panic!("数ではありません");
+            error!("数ではありません");
         }
         let val = t.val.unwrap();
         *token = t.next.take();
         return val;
     } else {
-        error("数ではありません");
+        error!("数ではありません");
         0
     }
 }
@@ -123,7 +137,7 @@ fn tokenize(input: &str) -> Option<Box<Token>> {
             continue;
         }
 
-        error("トークナイズできません");
+        error!("トークナイズできません");
     }
 
     new_token(TokenKind::TkEof, cur, String::new());
