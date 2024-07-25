@@ -1,115 +1,224 @@
-use std::process;
+use std::{process, str::FromStr};
+
+#[derive(Debug, PartialEq)]
+enum TokenKind {
+    TkReserved, // 記号
+    TkNum,      // 整数トークン
+    TkEof,      // 入力の終わりを表すトークン
+}
+// トークン型
+#[derive(Debug)]
+struct Token {
+    kind: TokenKind,          // トークンの型
+    next: Option<Box<Token>>, // 次の入力トークン
+    val: Option<i32>,         // kindがTK_NUMの場合、その数値
+    str: String,              // トークン文字列
+}
+impl Default for Token {
+    fn default() -> Self {
+        Token {
+            kind: TokenKind::TkEof,
+            next: None,
+            val: None,
+            str: String::new(),
+        }
+    }
+}
+fn error(msg: &str) {
+    eprintln!("{}", msg);
+    process::exit(1);
+}
+fn consume(token: &mut Option<Box<Token>>, op: char) -> bool {
+    if let Some(t) = token {
+        if t.kind == TokenKind::TkReserved && t.str.chars().next() == Some(op) {
+            *token = t.next.take();
+            return true;
+        }
+    }
+    false
+}
+fn expect(token: &mut Option<Box<Token>>, op: char) {
+    if let Some(t) = token {
+        if t.kind != TokenKind::TkReserved || t.str.chars().next() != Some(op) {
+            error(&format!("'{}'ではありません", op));
+        }
+        *token = t.next.take();
+    } else {
+        error(&format!("'{}'ではありません", op));
+    }
+}
+fn expect_number(token: &mut Option<Box<Token>>) -> i32 {
+    if let Some(t) = token {
+        if t.kind != TokenKind::TkNum {
+            panic!("数ではありません");
+        }
+        let val = t.val.unwrap();
+        *token = t.next.take();
+        return val;
+    } else {
+        error("数ではありません");
+        0
+    }
+}
+fn at_eof(token: &Option<Box<Token>>) -> bool {
+    if let Some(t) = token {
+        t.kind == TokenKind::TkEof
+    } else {
+        false
+    }
+}
+
+fn new_token(kind: TokenKind, cur: &mut Box<Token>, str: String) -> &mut Box<Token> {
+    let token = Box::new(Token {
+        kind,
+        next: None,
+        val: None,
+        str,
+    });
+    cur.next = Some(token);
+    // cur.nextをSomeから取り出して返す
+    cur.next.as_mut().unwrap()
+}
+fn tokenize(input: &str) -> Option<Box<Token>> {
+    let mut p = input.chars().peekable();
+    let mut head = Box::new(Token::default());
+    let mut cur = &mut head;
+
+    while let Some(&c) = p.peek() {
+        if c.is_whitespace() {
+            p.next();
+            continue;
+        }
+
+        if c == '+' || c == '-' {
+            cur = new_token(TokenKind::TkReserved, cur, c.to_string());
+            p.next();
+            continue;
+        }
+
+        if c.is_digit(10) {
+            let mut num_str = String::new();
+            while let Some(&c) = p.peek() {
+                if c.is_digit(10) {
+                    num_str.push(c);
+                    p.next();
+                } else {
+                    break;
+                }
+            }
+            cur = new_token(TokenKind::TkNum, cur, num_str.clone());
+            cur.val = Some(i32::from_str(&num_str).unwrap());
+            continue;
+        }
+
+        error("トークナイズできません");
+    }
+
+    new_token(TokenKind::TkEof, cur, String::new());
+    head.next
+}
 
 fn main() {
-    let args: Vec<String> = std::env::args().collect(); // コマンドライン引数をベクターに収集
+    let args: Vec<String> = std::env::args().collect();
 
     if args.len() != 2 {
         eprintln!("引数の個数が正しくありません");
-        process::exit(1); // プログラムを終了
+        process::exit(1);
     }
 
-    let p = args[1].as_str(); // コマンドライン引数をスライスとして取得
+    let mut token = tokenize(&args[1]);
 
     println!(".intel_syntax noprefix");
     println!(".globl main");
     println!("main:");
 
-    // 最初の数値を取得して表示
-    let (mut value, mut p) = match parse_number(p) {
-        Some(result) => result,
-        None => {
-            eprintln!("数値の変換に失敗しました");
-            process::exit(1);
-        }
-    };
-    println!("  mov rax, {}", value);
+    // 最初の数値を読み取ってmov命令を生成
+    let initial_val = expect_number(&mut token);
+    println!("  mov rax, {}", initial_val);
 
-    while !p.is_empty() {
-        match p.chars().next() {
-            Some('+') => {
-                p = &p[1..];
-                match parse_number(p) {
-                    Some((num, rest)) => {
-                        value = num;
-                        p = rest;
-                        println!("  add rax, {}", value);
-                    }
-                    None => {
-                        eprintln!("数値の変換に失敗しました");
-                        process::exit(1);
-                    }
-                }
-            }
-            Some('-') => {
-                p = &p[1..];
-                match parse_number(p) {
-                    Some((num, rest)) => {
-                        value = num;
-                        p = rest;
-                        println!("  sub rax, {}", value);
-                    }
-                    None => {
-                        eprintln!("数値の変換に失敗しました");
-                        process::exit(1);
-                    }
-                }
-            }
-            Some(c) => {
-                eprintln!("予期しない文字です: '{}'", c);
-                process::exit(1);
-            }
-            None => break,
+    // '+<数>'あるいは'-<数>'というトークンの並びを消費しつつ
+    // アセンブリを出力
+    while !at_eof(&token) {
+        if consume(&mut token, '+') {
+            println!("  add rax, {}", expect_number(&mut token));
+            continue;
         }
+        expect(&mut token, '-');
+        println!("  sub rax, {}", expect_number(&mut token));
+        continue;
     }
 
     println!("  ret");
 }
-
-fn parse_number(input: &str) -> Option<(i64, &str)> {
-    let mut chars = input.chars(); // 文字列のイテレータを作成
-    let mut num_str = String::new(); // 数値を保持する文字列を初期化
-
-    while let Some(c) = chars.next() {
-        // イテレータから次の文字を取得
-        if c.is_digit(10) {
-            // 文字が数字であれば
-            num_str.push(c); // 数字をnum_strに追加
-        } else {
-            let remaining = &input[num_str.len()..]; // 残りの文字列を取得
-            return num_str.parse::<i64>().ok().map(|num| (num, remaining)); // 数値に変換し、タプルを返す
-        }
-    }
-
-    num_str.parse::<i64>().ok().map(|num| (num, "")) // 最後まで数字の場合、数値と空文字列を返す
-}
 // mod tests {
-//     // use super::*;
+//     use super::*;
 //     use std::process::Command;
 
-//     #[test]
-//     fn test_main123() {
-//         let output = Command::new("cargo")
-//             .arg("run")
-//             .arg("--")
-//             .arg("123")
-//             .output()
-//             .expect("failed to execute process");
+//     fn create_token_chain(tokens: Vec<(TokenKind, String)>) -> Box<Token> {
+//         let mut head: Box<Token> = Box::new(Token::default());
+//         let mut cur: &mut Box<Token> = &mut head;
 
-//         assert!(output.status.success());
-//         let stdout_str = String::from_utf8_lossy(&output.stdout);
-//         assert!(stdout_str.contains("mov rax, 123"));
+//         for (kind, ch) in tokens {
+//             cur = new_token(kind, cur, ch);
+//         }
+//         head
+//     }
+
+//     #[test]
+//     fn test_new_token_reserved() {
+//         let mut cur = Box::new(Token::default());
+//         let token = new_token(TokenKind::TkReserved, &mut cur, '+');
+//         assert_eq!(token.kind, TokenKind::TkReserved);
+//         assert_eq!(token.str, '+');
+//     }
+
+//     #[test]
+//     fn test_create_token_chain() {
+//         let tokens = vec![
+//             (TokenKind::TkReserved, '+'),
+//             (TokenKind::TkNum, '1'),
+//             (TokenKind::TkEof, '\0'),
+//         ];
+//         let token_chain = create_token_chain(tokens);
+
+//         // headの次のトークンを検証
+//         let mut cur = &token_chain.next;
+
+//         assert_eq!(cur.as_ref().unwrap().kind, TokenKind::TkReserved);
+//         assert_eq!(cur.as_ref().unwrap().str, '+');
+
+//         cur = &cur.as_ref().unwrap().next;
+//         assert_eq!(cur.as_ref().unwrap().kind, TokenKind::TkNum);
+//         assert_eq!(cur.as_ref().unwrap().str, '1');
+
+//         cur = &cur.as_ref().unwrap().next;
+//         assert_eq!(cur.as_ref().unwrap().kind, TokenKind::TkEof);
+//         assert_eq!(cur.as_ref().unwrap().str, '\0');
 //     }
 //     #[test]
-//     fn test_main42() {
-//         let output = Command::new("cargo")
-//             .arg("run")
-//             .arg("--")
-//             .arg("42")
-//             .output()
-//             .expect("failed to execute process");
+//     fn test_tokenize() {
+//         let input = "1 + 2 - 3";
+//         let token_chain = tokenize(input);
 
-//         assert!(output.status.success());
-//         let stdout_str = String::from_utf8_lossy(&output.stdout);
-//         assert!(stdout_str.contains("mov rax, 42"));
+//         let expected_tokens = vec![
+//             (TokenKind::TkNum, '1', 1),
+//             (TokenKind::TkReserved, '+', 0),
+//             (TokenKind::TkNum, '2', 2),
+//             (TokenKind::TkReserved, '-', 0),
+//             (TokenKind::TkNum, '3', 3),
+//             (TokenKind::TkEof, '\0', 0),
+//         ];
+
+//         let mut cur = &Some(token_chain);
+//         for (expected_kind, expected_str, expected_val) in expected_tokens {
+//             if let Some(token) = cur {
+//                 assert_eq!(token.kind, expected_kind);
+//                 assert_eq!(token.str, expected_str);
+//                 assert_eq!(token.val, expected_val);
+//                 cur = &token.next;
+//             } else {
+//                 panic!("トークンの数が不足しています");
+//             }
+//         }
 //     }
 // }
