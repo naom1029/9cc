@@ -1,4 +1,5 @@
-use std::{process, str::FromStr};
+use std::fmt::Write as FmtWrite;
+use std::{fmt, process, str::FromStr};
 
 #[derive(Debug, PartialEq)]
 enum TokenKind {
@@ -23,6 +24,17 @@ impl Default for Token {
             str: String::new(),
         }
     }
+}
+#[allow(dead_code)]
+fn error_at(user_input: &str, loc: usize, fmt: fmt::Arguments) {
+    let mut buffer = String::new();
+
+    writeln!(buffer, "{}", user_input).unwrap();
+    writeln!(buffer, "{:width$}^ ", "", width = loc).unwrap();
+    writeln!(buffer, "{}", fmt).unwrap();
+
+    eprintln!("{}", buffer);
+    process::exit(1);
 }
 fn error(msg: &str) {
     eprintln!("{}", msg);
