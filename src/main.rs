@@ -1,4 +1,6 @@
+use lazy_static::lazy_static;
 use std::fmt::Write as FmtWrite;
+use std::sync::Mutex;
 use std::{fmt, process, str::FromStr};
 
 #[derive(Debug, PartialEq)]
@@ -14,6 +16,7 @@ struct Token {
     next: Option<Box<Token>>, // 次の入力トークン
     val: Option<i32>,         // kindがTK_NUMの場合、その数値
     str: String,              // トークン文字列
+    pos: usize,               // トークンの位置
 }
 impl Default for Token {
     fn default() -> Self {
@@ -22,16 +25,22 @@ impl Default for Token {
             next: None,
             val: None,
             str: String::new(),
+            pos: 0,
         }
     }
 }
+lazy_static! {
+    static ref USER_INPUT: Mutex<String> = Mutex::new(String::new());
+}
 #[allow(dead_code)]
-fn error_at(loc: &str, input: &str, args: fmt::Arguments) {
+fn error_at(pos: usize, args: fmt::Arguments) {
     let mut buffer = String::new();
 
-    let pos = loc.as_ptr() as usize - input.as_ptr() as usize;
-    writeln!(buffer, "{}", input).unwrap();
-    writeln!(buffer, "{:width$}^ ", "", width = pos).unwrap();
+    {
+        let user_input = USER_INPUT.lock().unwrap();
+        writeln!(buffer, "{}", *user_input).unwrap();
+        writeln!(buffer, "{:width$}^ ", "", width = pos - 1).unwrap();
+    }
 
     writeln!(buffer, "{}", args).unwrap();
     eprintln!("{}", buffer);
@@ -39,8 +48,8 @@ fn error_at(loc: &str, input: &str, args: fmt::Arguments) {
 }
 
 macro_rules! error_at {
-    ($loc:expr, $input:expr, $($arg:tt)*) => {
-        error_at($loc, $input, format_args!($($arg)*));
+    ($loc:expr, $($arg:tt)*) => {
+        error_at($loc, format_args!($($arg)*));
     };
 }
 
@@ -66,7 +75,7 @@ fn consume(token: &mut Option<Box<Token>>, op: char) -> bool {
 fn expect(token: &mut Option<Box<Token>>, op: char) {
     if let Some(t) = token {
         if t.kind != TokenKind::TkReserved || t.str.chars().next() != Some(op) {
-            error!("'{}'ではありません", op);
+            error_at!(t.pos, "'{}'ではありません", op);
         }
         *token = t.next.take();
     } else {
@@ -76,7 +85,7 @@ fn expect(token: &mut Option<Box<Token>>, op: char) {
 fn expect_number(token: &mut Option<Box<Token>>) -> i32 {
     if let Some(t) = token {
         if t.kind != TokenKind::TkNum {
-            error!("数ではありません");
+            error_at!(t.pos, "数ではありません");
         }
         let val = t.val.unwrap();
         *token = t.next.take();
@@ -94,12 +103,13 @@ fn at_eof(token: &Option<Box<Token>>) -> bool {
     }
 }
 
-fn new_token(kind: TokenKind, cur: &mut Box<Token>, str: String) -> &mut Box<Token> {
+fn new_token(kind: TokenKind, cur: &mut Box<Token>, str: String, pos: usize) -> &mut Box<Token> {
     let token = Box::new(Token {
         kind,
         next: None,
         val: None,
         str,
+        pos,
     });
     cur.next = Some(token);
     // cur.nextをSomeから取り出して返す
@@ -109,15 +119,16 @@ fn tokenize(input: &str) -> Option<Box<Token>> {
     let mut p = input.chars().peekable();
     let mut head = Box::new(Token::default());
     let mut cur = &mut head;
-
+    let mut pos = cur.pos;
     while let Some(&c) = p.peek() {
+        pos += 1;
         if c.is_whitespace() {
             p.next();
             continue;
         }
 
         if c == '+' || c == '-' {
-            cur = new_token(TokenKind::TkReserved, cur, c.to_string());
+            cur = new_token(TokenKind::TkReserved, cur, c.to_string(), pos);
             p.next();
             continue;
         }
@@ -132,15 +143,15 @@ fn tokenize(input: &str) -> Option<Box<Token>> {
                     break;
                 }
             }
-            cur = new_token(TokenKind::TkNum, cur, num_str.clone());
+            cur = new_token(TokenKind::TkNum, cur, num_str.clone(), pos);
             cur.val = Some(i32::from_str(&num_str).unwrap());
             continue;
         }
 
-        error!("トークナイズできません");
+        error_at!(pos, "トークナイズできません");
     }
 
-    new_token(TokenKind::TkEof, cur, String::new());
+    new_token(TokenKind::TkEof, cur, String::new(), pos);
     head.next
 }
 
@@ -148,8 +159,13 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
 
     if args.len() != 2 {
-        eprintln!("引数の個数が正しくありません");
+        error!("'{}'引数の個数が正しくありません。", args.len());
         process::exit(1);
+    }
+    let user_input_str = &args[1];
+    {
+        let mut user_input = USER_INPUT.lock().unwrap();
+        *user_input = user_input_str.clone();
     }
 
     let mut token = tokenize(&args[1]);
