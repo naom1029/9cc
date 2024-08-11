@@ -4,6 +4,22 @@ use std::sync::Mutex;
 use std::{fmt, process, str::FromStr};
 
 #[derive(Debug, PartialEq)]
+enum NodeKind {
+    NdAdd, // +
+    NdSub, // -
+    NdMul, // *
+    NdDiv, // /
+    NdNum, // 整数
+}
+
+struct Node {
+    kind: NodeKind,         // ノードの型
+    lhs: Option<Box<Node>>, // 左辺
+    rhs: Option<Box<Node>>, // 右辺
+    val: Option<i32>,       // kindがNdNumの場合のみ使う
+}
+
+#[derive(Debug, PartialEq)]
 enum TokenKind {
     TkReserved, // 記号
     TkNum,      // 整数トークン
@@ -60,9 +76,90 @@ fn error(args: fmt::Arguments) {
 
 macro_rules! error {
     ($($arg:tt)*) => {
-        error(format_args!($($arg)*));
+        error(format_args!($($arg)*))
     };
 }
+
+fn new_node(kind: NodeKind, lhs: Box<Node>, rhs: Box<Node>) -> Box<Node> {
+    let node = Box::new(Node {
+        kind,
+        rhs: Some(rhs),
+        lhs: Some(lhs),
+        val: None,
+    });
+    return node;
+}
+
+fn new_node_num(val: i32) -> Box<Node> {
+    let node = Box::new(Node {
+        kind: NodeKind::NdNum,
+        rhs: None,
+        lhs: None,
+        val: Some(val),
+    });
+    return node;
+}
+
+fn expr(token: &mut Option<Box<Token>>) -> Box<Node> {
+    let mut node = mul(token);
+    loop {
+        if consume(token, '+') {
+            node = new_node(NodeKind::NdAdd, node, mul(token));
+        } else if consume(token, '-') {
+            node = new_node(NodeKind::NdSub, node, mul(token))
+        } else {
+            return node;
+        }
+    }
+}
+
+fn mul(token: &mut Option<Box<Token>>) -> Box<Node> {
+    let mut node = primary(token);
+    loop {
+        if consume(token, '*') {
+            node = new_node(NodeKind::NdMul, node, primary(token));
+        } else if consume(token, '/') {
+            node = new_node(NodeKind::NdDiv, node, primary(token))
+        } else {
+            return node;
+        }
+    }
+}
+
+fn primary(token: &mut Option<Box<Token>>) -> Box<Node> {
+    // 次のトークンが"("なら、"("expr")"のはず
+    if consume(token, '(') {
+        let node = expr(token);
+        expect(token, ')');
+        return node;
+    }
+    return new_node_num(expect_number(token));
+}
+
+fn gen(node: Box<Node>) {
+    if node.kind == NodeKind::NdNum {
+        println!("  push {}", node.val.unwrap());
+        return;
+    }
+    gen(node.lhs.unwrap());
+    gen(node.rhs.unwrap());
+
+    println!("  pop rdi");
+    println!("  pop rax");
+
+    match node.kind {
+        NodeKind::NdAdd => println!("   add rax, rdi"),
+        NodeKind::NdSub => println!("   sub rax, rdi"),
+        NodeKind::NdMul => println!("   imul rax, rdi"),
+        NodeKind::NdDiv => {
+            println!("  cqo");
+            println!("  idiv rdi");
+        }
+        _ => error!("不正なnodeです"),
+    }
+    println!("  push rax");
+}
+
 fn consume(token: &mut Option<Box<Token>>, op: char) -> bool {
     if let Some(t) = token {
         if t.kind == TokenKind::TkReserved && t.str.chars().next() == Some(op) {
@@ -95,6 +192,7 @@ fn expect_number(token: &mut Option<Box<Token>>) -> i32 {
         0
     }
 }
+#[allow(dead_code)]
 fn at_eof(token: &Option<Box<Token>>) -> bool {
     if let Some(t) = token {
         t.kind == TokenKind::TkEof
@@ -126,8 +224,7 @@ fn tokenize(input: &str) -> Option<Box<Token>> {
             p.next();
             continue;
         }
-
-        if c == '+' || c == '-' {
+        if c == '+' || c == '-' || c == '*' || c == '/' || c == '(' || c == ')' {
             cur = new_token(TokenKind::TkReserved, cur, c.to_string(), pos);
             p.next();
             continue;
@@ -167,29 +264,21 @@ fn main() {
         let mut user_input = USER_INPUT.lock().unwrap();
         *user_input = user_input_str.clone();
     }
-
+    // トークナイズしてパースする
     let mut token = tokenize(&args[1]);
+    let node = expr(&mut token);
 
+    // アセンブリの前半部分を出力
     println!(".intel_syntax noprefix");
     println!(".globl main");
     println!("main:");
 
-    // 最初の数値を読み取ってmov命令を生成
-    let initial_val = expect_number(&mut token);
-    println!("  mov rax, {}", initial_val);
+    // 抽象構文木を下りながらコード生成
+    gen(node);
 
-    // '+<数>'あるいは'-<数>'というトークンの並びを消費しつつ
-    // アセンブリを出力
-    while !at_eof(&token) {
-        if consume(&mut token, '+') {
-            println!("  add rax, {}", expect_number(&mut token));
-            continue;
-        }
-        expect(&mut token, '-');
-        println!("  sub rax, {}", expect_number(&mut token));
-        continue;
-    }
-
+    // スタックトップに式全体の値が残っているはずなので
+    // それをRAXにろーどして関数からの戻り値とする
+    println!("  pop rax");
     println!("  ret");
 }
 // mod tests {
