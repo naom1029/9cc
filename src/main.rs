@@ -9,6 +9,10 @@ enum NodeKind {
     NdSub, // -
     NdMul, // *
     NdDiv, // /
+    NdEq,  // ==
+    NdNe,  // !=
+    NdLt,  // <
+    NdLe,  // <=
     NdNum, // 整数
 }
 
@@ -33,6 +37,7 @@ struct Token {
     val: Option<i32>,         // kindがTK_NUMの場合、その数値
     str: String,              // トークン文字列
     pos: usize,               // トークンの位置
+    len: usize,               // トークンの長さ
 }
 impl Default for Token {
     fn default() -> Self {
@@ -42,6 +47,7 @@ impl Default for Token {
             val: None,
             str: String::new(),
             pos: 0,
+            len: 0,
         }
     }
 }
@@ -104,11 +110,48 @@ fn new_num(val: i32) -> Box<Node> {
 }
 
 fn expr(token: &mut Option<Box<Token>>) -> Box<Node> {
+    return equality(token);
+}
+
+fn equality(token: &mut Option<Box<Token>>) -> Box<Node> {
+    let mut node = relational(token);
+    loop {
+        if consume(token, "==".to_string()) {
+            node = new_binary(NodeKind::NdEq, node, relational(token));
+        } else if consume(token, "!=".to_string()) {
+            node = new_binary(NodeKind::NdNe, node, relational(token));
+        } else {
+            return node;
+        }
+    }
+}
+
+// relational = add ("<" add | "<=" add | ">" add | ">=" add)*
+fn relational(token: &mut Option<Box<Token>>) -> Box<Node> {
+    let mut node = add(token);
+
+    loop {
+        if consume(token, '<'.to_string()) {
+            node = new_binary(NodeKind::NdLt, node, add(token));
+        } else if consume(token, "<=".to_string()) {
+            node = new_binary(NodeKind::NdLe, node, add(token));
+        } else if consume(token, '>'.to_string()) {
+            node = new_binary(NodeKind::NdLt, add(token), node)
+        } else if consume(token, ">=".to_string()) {
+            node = new_binary(NodeKind::NdLe, add(token), node)
+        } else {
+            return node;
+        }
+    }
+}
+
+// add = mul ("+" mul | "-" mul)*
+fn add(token: &mut Option<Box<Token>>) -> Box<Node> {
     let mut node = mul(token);
     loop {
-        if consume(token, '+') {
+        if consume(token, '+'.to_string()) {
             node = new_binary(NodeKind::NdAdd, node, mul(token));
-        } else if consume(token, '-') {
+        } else if consume(token, '-'.to_string()) {
             node = new_binary(NodeKind::NdSub, node, mul(token))
         } else {
             return node;
@@ -116,32 +159,37 @@ fn expr(token: &mut Option<Box<Token>>) -> Box<Node> {
     }
 }
 
+// mul = unary("*" unary | "/" unary)*
 fn mul(token: &mut Option<Box<Token>>) -> Box<Node> {
     let mut node = unary(token);
     loop {
-        if consume(token, '*') {
+        if consume(token, '*'.to_string()) {
             node = new_binary(NodeKind::NdMul, node, unary(token));
-        } else if consume(token, '/') {
+        } else if consume(token, '/'.to_string()) {
             node = new_binary(NodeKind::NdDiv, node, unary(token))
         } else {
             return node;
         }
     }
 }
+
+// unary = ("+" | "-")? unary
 fn unary(token: &mut Option<Box<Token>>) -> Box<Node> {
-    if consume(token, '+') {
+    if consume(token, '+'.to_string()) {
         return unary(token);
     }
-    if consume(token, '-') {
+    if consume(token, '-'.to_string()) {
         return new_binary(NodeKind::NdSub, new_num(0), unary(token));
     }
     return primary(token);
 }
+
+// primary = "(" expr ")" | num
 fn primary(token: &mut Option<Box<Token>>) -> Box<Node> {
     // 次のトークンが"("なら、"("expr")"のはず
-    if consume(token, '(') {
+    if consume(token, '('.to_string()) {
         let node = expr(token);
-        expect(token, ')');
+        expect(token, ')'.to_string());
         return node;
     }
     return new_num(expect_number(token));
@@ -166,23 +214,43 @@ fn gen(node: Box<Node>) {
             println!("  cqo");
             println!("  idiv rdi");
         }
+        NodeKind::NdEq => {
+            println!("  cmp rax, rdi");
+            println!("  sete al");
+            println!("  movzb rax, al");
+        }
+        NodeKind::NdNe => {
+            println!("  cmp rax, rdi");
+            println!("  setne al");
+            println!("  movzb rax, al");
+        }
+        NodeKind::NdLt => {
+            println!("  cmp rax, rdi");
+            println!("  setl al");
+            println!("  movzb rax, al");
+        }
+        NodeKind::NdLe => {
+            println!("  cmp rax, rdi");
+            println!("  setle al");
+            println!("  movzb rax, al");
+        }
         _ => error!("不正なnodeです"),
     }
     println!("  push rax");
 }
 
-fn consume(token: &mut Option<Box<Token>>, op: char) -> bool {
+fn consume(token: &mut Option<Box<Token>>, op: String) -> bool {
     if let Some(t) = token {
-        if t.kind == TokenKind::TkReserved && t.str.chars().next() == Some(op) {
+        if t.kind == TokenKind::TkReserved && op.len() == t.len && op == t.str {
             *token = t.next.take();
             return true;
         }
     }
     false
 }
-fn expect(token: &mut Option<Box<Token>>, op: char) {
+fn expect(token: &mut Option<Box<Token>>, op: String) {
     if let Some(t) = token {
-        if t.kind != TokenKind::TkReserved || t.str.chars().next() != Some(op) {
+        if t.kind != TokenKind::TkReserved || op.len() != t.len || op != t.str {
             error_at!(t.pos, "'{}'ではありません", op);
         }
         *token = t.next.take();
@@ -212,18 +280,26 @@ fn at_eof(token: &Option<Box<Token>>) -> bool {
     }
 }
 
-fn new_token(kind: TokenKind, cur: &mut Box<Token>, str: String, pos: usize) -> &mut Box<Token> {
+fn new_token(
+    kind: TokenKind,
+    cur: &mut Box<Token>,
+    str: String,
+    pos: usize,
+    len: usize,
+) -> &mut Box<Token> {
     let token = Box::new(Token {
         kind,
         next: None,
         val: None,
         str,
         pos,
+        len,
     });
     cur.next = Some(token);
     // cur.nextをSomeから取り出して返す
     cur.next.as_mut().unwrap()
 }
+
 fn tokenize(input: &str) -> Option<Box<Token>> {
     let mut p = input.chars().peekable();
     let mut head = Box::new(Token::default());
@@ -231,16 +307,43 @@ fn tokenize(input: &str) -> Option<Box<Token>> {
     let mut pos = cur.pos;
     while let Some(&c) = p.peek() {
         pos += 1;
+
+        // 空白の処理
         if c.is_whitespace() {
             p.next();
             continue;
         }
-        if c == '+' || c == '-' || c == '*' || c == '/' || c == '(' || c == ')' {
-            cur = new_token(TokenKind::TkReserved, cur, c.to_string(), pos);
+
+        // 2文字のトークンの処理
+        if let Some(next_c) = p.clone().nth(1) {
+            let two_char_str = format!("{}{}", c, next_c);
+            if two_char_str == "=="
+                || two_char_str == "!="
+                || two_char_str == "<="
+                || two_char_str == ">="
+            {
+                cur = new_token(TokenKind::TkReserved, cur, two_char_str.clone(), pos, 2);
+                p.next(); // 1文字目を進める
+                p.next(); // 2文字目を進める
+                continue;
+            }
+        }
+
+        // 1文字のトークンの処理
+        if c == '+'
+            || c == '-'
+            || c == '*'
+            || c == '/'
+            || c == '('
+            || c == ')'
+            || c == '<'
+            || c == '>'
+        {
+            cur = new_token(TokenKind::TkReserved, cur, c.to_string(), pos, 1);
             p.next();
             continue;
         }
-
+        // 数値の処理
         if c.is_digit(10) {
             let mut num_str = String::new();
             while let Some(&c) = p.peek() {
@@ -251,15 +354,16 @@ fn tokenize(input: &str) -> Option<Box<Token>> {
                     break;
                 }
             }
-            cur = new_token(TokenKind::TkNum, cur, num_str.clone(), pos);
+            cur = new_token(TokenKind::TkNum, cur, num_str.clone(), pos, 0);
             cur.val = Some(i32::from_str(&num_str).unwrap());
+            cur.len = num_str.len();
             continue;
         }
 
         error_at!(pos, "トークナイズできません");
     }
 
-    new_token(TokenKind::TkEof, cur, String::new(), pos);
+    new_token(TokenKind::TkEof, cur, String::new(), pos, 0);
     head.next
 }
 
@@ -288,7 +392,7 @@ fn main() {
     gen(node);
 
     // スタックトップに式全体の値が残っているはずなので
-    // それをRAXにろーどして関数からの戻り値とする
+    // それをRAXにロードして関数からの戻り値とする
     println!("  pop rax");
     println!("  ret");
 }
