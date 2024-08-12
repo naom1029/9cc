@@ -80,23 +80,26 @@ macro_rules! error {
     };
 }
 
-fn new_node(kind: NodeKind, lhs: Box<Node>, rhs: Box<Node>) -> Box<Node> {
+fn new_node(kind: NodeKind) -> Box<Node> {
     let node = Box::new(Node {
         kind,
-        rhs: Some(rhs),
-        lhs: Some(lhs),
+        rhs: None,
+        lhs: None,
         val: None,
     });
     return node;
 }
 
-fn new_node_num(val: i32) -> Box<Node> {
-    let node = Box::new(Node {
-        kind: NodeKind::NdNum,
-        rhs: None,
-        lhs: None,
-        val: Some(val),
-    });
+fn new_binary(kind: NodeKind, lhs: Box<Node>, rhs: Box<Node>) -> Box<Node> {
+    let mut node = new_node(kind);
+    node.lhs = Some(lhs);
+    node.rhs = Some(rhs);
+    return node;
+}
+
+fn new_num(val: i32) -> Box<Node> {
+    let mut node = new_node(NodeKind::NdNum);
+    node.val = Some(val);
     return node;
 }
 
@@ -104,9 +107,9 @@ fn expr(token: &mut Option<Box<Token>>) -> Box<Node> {
     let mut node = mul(token);
     loop {
         if consume(token, '+') {
-            node = new_node(NodeKind::NdAdd, node, mul(token));
+            node = new_binary(NodeKind::NdAdd, node, mul(token));
         } else if consume(token, '-') {
-            node = new_node(NodeKind::NdSub, node, mul(token))
+            node = new_binary(NodeKind::NdSub, node, mul(token))
         } else {
             return node;
         }
@@ -114,18 +117,26 @@ fn expr(token: &mut Option<Box<Token>>) -> Box<Node> {
 }
 
 fn mul(token: &mut Option<Box<Token>>) -> Box<Node> {
-    let mut node = primary(token);
+    let mut node = unary(token);
     loop {
         if consume(token, '*') {
-            node = new_node(NodeKind::NdMul, node, primary(token));
+            node = new_binary(NodeKind::NdMul, node, unary(token));
         } else if consume(token, '/') {
-            node = new_node(NodeKind::NdDiv, node, primary(token))
+            node = new_binary(NodeKind::NdDiv, node, unary(token))
         } else {
             return node;
         }
     }
 }
-
+fn unary(token: &mut Option<Box<Token>>) -> Box<Node> {
+    if consume(token, '+') {
+        return unary(token);
+    }
+    if consume(token, '-') {
+        return new_binary(NodeKind::NdSub, new_num(0), unary(token));
+    }
+    return primary(token);
+}
 fn primary(token: &mut Option<Box<Token>>) -> Box<Node> {
     // 次のトークンが"("なら、"("expr")"のはず
     if consume(token, '(') {
@@ -133,7 +144,7 @@ fn primary(token: &mut Option<Box<Token>>) -> Box<Node> {
         expect(token, ')');
         return node;
     }
-    return new_node_num(expect_number(token));
+    return new_num(expect_number(token));
 }
 
 fn gen(node: Box<Node>) {
