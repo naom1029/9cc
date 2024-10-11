@@ -1,11 +1,11 @@
 use std::process;
 
-pub mod chibicc;
+pub mod cc;
 pub mod codegen;
 pub mod parse;
 pub mod tokenize;
 use codegen::codegen;
-use parse::expr;
+use parse::{expr, program};
 use tokenize::{error, tokenize, USER_INPUT};
 
 fn main() {
@@ -22,8 +22,9 @@ fn main() {
     }
     // トークナイズしてパースする
     let mut token = tokenize(&args[1]);
-    let node = expr(&mut token);
+
+    program(&mut token);
 
     // 抽象構文木を下りながらコード生成
-    codegen(node);
+    codegen();
 }

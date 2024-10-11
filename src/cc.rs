@@ -1,28 +1,38 @@
-#[derive(Debug, PartialEq)]
-pub enum NodeKind {
-    NdAdd, // +
-    NdSub, // -
-    NdMul, // *
-    NdDiv, // /
-    NdEq,  // ==
-    NdNe,  // !=
-    NdLt,  // <
-    NdLe,  // <=
-    NdNum, // 整数
-}
+use lazy_static::lazy_static;
+use std::sync::Mutex;
 
+#[derive(Debug, PartialEq, Clone)]
+pub enum NodeKind {
+    NdAdd,    // +
+    NdSub,    // -
+    NdMul,    // *
+    NdDiv,    // /
+    NdAssign, // =
+    NdLvar,   // ローカル変数
+    NdEq,     // ==
+    NdNe,     // !=
+    NdLt,     // <
+    NdLe,     // <=
+    NdNum,    // 整数
+}
+#[derive(Debug, Clone)]
 pub struct Node {
     pub kind: NodeKind,         // ノードの型
     pub lhs: Option<Box<Node>>, // 左辺
     pub rhs: Option<Box<Node>>, // 右辺
     pub val: Option<i32>,       // kindがNdNumの場合のみ使う
+    pub offset: Option<i32>,    // kindがNdLvarの場合のみ使う
 }
 
 #[derive(Debug, PartialEq)]
 pub enum TokenKind {
     TkReserved, // 記号
+    TkIndent,   // 識別子
     TkNum,      // 整数トークン
     TkEof,      // 入力の終わりを表すトークン
+}
+lazy_static! {
+    pub static ref CODE: Mutex<Vec<Option<Box<Node>>>> = Mutex::new(Vec::with_capacity(100));
 }
 // トークン型
 #[derive(Debug)]

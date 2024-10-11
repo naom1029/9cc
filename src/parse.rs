@@ -1,14 +1,43 @@
-use crate::chibicc::{Node, NodeKind, Token};
-use crate::tokenize::{consume, expect, expect_number};
+use crate::cc::{Node, NodeKind, Token, TokenKind, CODE};
+use crate::tokenize::{expect, expect_number};
 
+// 次のトークンが期待している記号の時には、トークンを1つ読み進めて真を返す
+pub fn consume(token: &mut Option<Box<Token>>, op: String) -> bool {
+    if let Some(t) = token {
+        if t.kind == TokenKind::TkReserved && op.len() == t.len && op == t.str {
+            *token = t.next.take();
+            return true;
+        }
+    }
+    false
+}
+pub fn consume_indent(token: &mut Option<Box<Token>>) -> Option<Box<Token>> {
+    if let Some(ref t) = token {
+        if t.kind != TokenKind::TkIndent {
+            return None;
+        }
+    }
+    token.take()
+}
 pub fn new_node(kind: NodeKind) -> Box<Node> {
     let node = Box::new(Node {
         kind,
         rhs: None,
         lhs: None,
         val: None,
+        offset: None,
     });
     return node;
+}
+
+pub fn new_node_lvar(op: &str) -> Box<Node> {
+    let mut node = new_node(NodeKind::NdLvar);
+    if let Some(first_char) = op.chars().next() {
+        node.offset = Some(first_char as i32 - 'a' as i32);
+    } else {
+        node.offset = None;
+    }
+    node
 }
 
 pub fn new_binary(kind: NodeKind, lhs: Box<Node>, rhs: Box<Node>) -> Box<Node> {
@@ -24,10 +53,44 @@ pub fn new_num(val: i32) -> Box<Node> {
     return node;
 }
 
-pub fn expr(token: &mut Option<Box<Token>>) -> Box<Node> {
-    return equality(token);
+#[allow(dead_code)]
+pub fn at_eof(token: &Option<Box<Token>>) -> bool {
+    if let Some(t) = token {
+        t.kind == TokenKind::TkEof
+    } else {
+        false
+    }
 }
+// assign = equality ("=" assign)?
+pub fn assign(token: &mut Option<Box<Token>>) -> Box<Node> {
+    let mut node = equality(token);
+    if consume(token, "=".to_string()) {
+        node = new_binary(NodeKind::NdAssign, node, assign(token));
+    }
+    return node;
+}
+// expr = assign
+pub fn expr(token: &mut Option<Box<Token>>) -> Box<Node> {
+    return assign(token);
+}
+// stmt = expr ";"
+pub fn stmt(token: &mut Option<Box<Token>>) -> Box<Node> {
+    let node = expr(token);
+    expect(token, ";".to_string());
+    return node;
+}
+// program = stmt*
+pub fn program(token: &mut Option<Box<Token>>) {
+    let mut code = CODE.lock().unwrap();
 
+    while !at_eof(token) {
+        code.push(Some(stmt(token)));
+    }
+
+    // 終端を示すために `None` を追加
+    code.push(None);
+}
+// equality = relational ("==" relational | "!=" relational)*
 pub fn equality(token: &mut Option<Box<Token>>) -> Box<Node> {
     let mut node = relational(token);
     loop {
@@ -99,7 +162,7 @@ pub fn unary(token: &mut Option<Box<Token>>) -> Box<Node> {
     return primary(token);
 }
 
-// primary = "(" expr ")" | num
+// primary = num | ident | "(" expr ")"
 pub fn primary(token: &mut Option<Box<Token>>) -> Box<Node> {
     // 次のトークンが"("なら、"("expr")"のはず
     if consume(token, '('.to_string()) {

@@ -1,4 +1,4 @@
-use crate::chibicc::{Token, TokenKind};
+use crate::cc::{Token, TokenKind};
 use lazy_static::lazy_static;
 use std::fmt::Write as FmtWrite;
 use std::str::FromStr;
@@ -40,15 +40,6 @@ macro_rules! error {
     };
 }
 
-pub fn consume(token: &mut Option<Box<Token>>, op: String) -> bool {
-    if let Some(t) = token {
-        if t.kind == TokenKind::TkReserved && op.len() == t.len && op == t.str {
-            *token = t.next.take();
-            return true;
-        }
-    }
-    false
-}
 pub fn expect(token: &mut Option<Box<Token>>, op: String) {
     if let Some(t) = token {
         if t.kind != TokenKind::TkReserved || op.len() != t.len || op != t.str {
@@ -64,21 +55,16 @@ pub fn expect_number(token: &mut Option<Box<Token>>) -> i32 {
         if t.kind != TokenKind::TkNum {
             error_at!(t.pos, "数ではありません");
         }
-        let val = t.val.unwrap();
-        *token = t.next.take();
-        return val;
+        if let Some(val) = t.val {
+            *token = t.next.take();
+            return val;
+        } else {
+            error_at!(t.pos, "数の値が見つかりません");
+        }
     } else {
         error!("数ではありません");
-        0
     }
-}
-#[allow(dead_code)]
-pub fn at_eof(token: &Option<Box<Token>>) -> bool {
-    if let Some(t) = token {
-        t.kind == TokenKind::TkEof
-    } else {
-        false
-    }
+    panic!("期待される数が見つかりませんでした");
 }
 
 pub fn new_token(
@@ -160,7 +146,10 @@ pub fn tokenize(input: &str) -> Option<Box<Token>> {
             cur.len = num_str.len();
             continue;
         }
-
+        // 識別子の処理
+        if c.is_alphabetic() {
+            cur = new_token(TokenKind::TkIndent, cur, c.to_string(), pos, 1);
+        }
         error_at!(pos, "トークナイズできません");
     }
 
